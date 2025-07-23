@@ -2,26 +2,48 @@ pipeline {
     agent any
 
     tools {
-        maven 'LocalMaven'
         jdk 'JDK17'
-    }
-
-    environment {
-        SONARQUBE_SERVER = 'MySonarQubeServer'  // Match Jenkins global config name
+        maven 'Maven'
     }
 
     stages {
-        stage('Checkout') {
-            steps {
-                git branch: 'main', url: 'https://github.com/adarshadshetty/BoardGame.git'
+        stage('Parallel Code Checks') {
+            parallel {
+                stage('Code Stability') {
+                    steps {
+                        echo 'Running unit tests for code stability...'
+                        sh 'mvn test'
+                    }
+                }
+                stage('Code Quality Analysis') {
+                    steps {
+                        echo 'Running SonarQube analysis...'
+                        withSonarQubeEnv('MySonarQube') {
+                            sh 'mvn sonar:sonar'
+                        }
+                    }
+                }
+                stage('Code Coverage Analysis') {
+                    steps {
+                        echo 'Analyzing code coverage...'
+                        sh 'mvn jacoco:report'
+                    }
+                }
             }
         }
 
-        stage('SonarQube Analysis') {
+        stage('Generate Reports') {
             steps {
-                withSonarQubeEnv("${SONARQUBE_SERVER}") {
-                    sh 'mvn clean verify sonar:sonar'
-                }
+                echo 'Generating aggregated reports...'
+                // Optional: Combine reports or post-process
+            }
+        }
+
+        stage('Publish Artifacts') {
+            steps {
+                echo 'Publishing build artifacts...'
+                sh 'mvn package'
+                archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
             }
         }
     }
