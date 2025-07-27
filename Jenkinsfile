@@ -2,80 +2,107 @@ pipeline {
     agent any
 
     parameters {
-        booleanParam(
-            name: 'RUN_SONAR_SCAN',
-            defaultValue: true,
-            description: 'Run SonarQube Code Analysis'
-        )
+        booleanParam(name: 'SKIP_STABILITY', defaultValue: false, description: 'Skip Code Stability Check')
+        booleanParam(name: 'SKIP_QUALITY', defaultValue: false, description: 'Skip Code Quality Analysis')
+        booleanParam(name: 'SKIP_COVERAGE', defaultValue: false, description: 'Skip Code Coverage Analysis')
     }
 
     tools {
-        jdk 'JDK17'           // Must match Jenkins config
-        maven 'LocalMaven'    // Must match Maven installation name in Jenkins
+        maven 'LocalMaven'
+        jdk 'JDK'
     }
 
     environment {
-        SONAR_URL = 'http://localhost:9000'     // Replace if you're using another host
-        SONAR_AUTH_TOKEN = credentials('Jenkins_token') // Your SonarQube token ID
-        EMAIL_RECIPIENT = 'rehan.ali9325@gmail.com'
+        REPO_URL = 'https://github.com/OT-MICROSERVICES/salary-api.git'
+        BRANCH = 'main'
+        ARTIFACT_DIR = 'target'
+        RECIPIENT = 'rehan.ali9325@gmail.com'
+        SLACK_CHANNEL = '#ci-cd-updates'
     }
 
     stages {
-        stage('Checkout') {
+        stage('Checkout Code') {
             steps {
-                git url: 'https://github.com/SyedRehanAli25/BoardGame.git', branch: 'main'
+                git branch: "${BRANCH}", url: "${REPO_URL}"
             }
         }
 
-        stage('Build') {
-            steps {
-                sh 'mvn clean package'
-            }
-        }
-
-        stage('Parallel Quality Checks') {
+        stage('Parallel Scans') {
             parallel {
                 stage('Code Stability') {
-                    steps {
-                        sh 'mvn verify'
-                    }
-                }
-                stage('Code Quality (SonarQube)') {
                     when {
-                        expression { return params.RUN_SONAR_SCAN }
+                        expression { return !params.SKIP_STABILITY }
                     }
                     steps {
-                        withSonarQubeEnv('MySonarQubeServer') {
-                            sh "mvn sonar:sonar -Dsonar.projectKey=BoardGame -Dsonar.login=$SONAR_AUTH_TOKEN"
-                        }
-                    }
-                }
-                stage('Code Coverage') {
-                    steps {
+                        echo "Running Unit Tests..."
                         sh 'mvn test'
                     }
                 }
+
+                stage('Code Quality Analysis') {
+                    when {
+                        expression { return !params.SKIP_QUALITY }
+                    }
+                    steps {
+                        echo "Running SonarQube Analysis..."
+                        withSonarQubeEnv('MySonarQube') {
+                            sh 'mvn sonar:sonar'
+                        }
+                    }
+                }
+
+                stage('Code Coverage Analysis') {
+                    when {
+                        expression { return !params.SKIP_COVERAGE }
+                    }
+                    steps {
+                        echo "Generating Code Coverage Report..."
+                        sh 'mvn jacoco:report'
+                    }
+                }
             }
         }
 
-        stage('Publish Artifact') {
+        stage('Approval to Publish') {
             steps {
-                archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                script {
+                    def userInput = input message: 'Do you want to publish artifacts?', ok: 'Yes',
+                        parameters: [choice(name: 'Proceed?', choices: ['Approve', 'Reject'], description: 'Select an option')]
+                    
+                    if (userInput == 'Reject') {
+                        error "Build Stopped: User rejected artifact publishing."
+                    }
+                }
+            }
+        }
+
+        stage('Publish Artifacts') {
+            steps {
+                echo "Publishing Artifacts..."
+                archiveArtifacts artifacts: "${ARTIFACT_DIR}/*.jar", fingerprint: true
             }
         }
     }
 
     post {
         success {
-            mail to: "${EMAIL_RECIPIENT}",
-                 subject: "Jenkins Build SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                 body: "Success! Jenkins build completed.\n\nProject: ${env.JOB_NAME}\nBuild: ${env.BUILD_NUMBER}\nURL: ${env.BUILD_URL}"
+            mail to: "${RECIPIENT}",
+                subject: "Build SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "Good news! The build was successful.\nCheck it here: ${env.BUILD_URL}"
+
+            slackSend channel: "${SLACK_CHANNEL}", message: "SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
         }
+
         failure {
-            mail to: "${EMAIL_RECIPIENT}",
-                 subject: "Jenkins Build FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                 body: "Failed! Jenkins build encountered an error.\n\nProject: ${env.JOB_NAME}\nBuild: ${env.BUILD_NUMBER}\nURL: ${env.BUILD_URL}"
+            mail to: "${RECIPIENT}",
+                subject: "Build FAILURE: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "Oops! The build failed.\nCheck it here: ${env.BUILD_URL}"
+
+            slackSend channel: "${SLACK_CHANNEL}", message: " FAILURE: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+        }
+
+        always {
+            echo "Build finished: ${currentBuild.result}"
         }
     }
 }
-
